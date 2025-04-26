@@ -38,8 +38,11 @@ def extract_contextual_objects(ego_df, obj_df, radius=25):
         nearby_classes = obj_class[dists < radius]
 
         # Count occurrences per class
-        for cls in nearby_classes:
-            result[i, cls] += 1
+        for idx, cls in enumerate(obj_class):
+            if dists[idx] < radius:
+                weight = 1 / (dists[idx] + 1e-3)  # or np.exp(-dists[idx] / 20)
+                result[i, cls] += weight
+
 
     return result
 

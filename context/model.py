@@ -2,40 +2,64 @@
 import torch
 import torch.nn as nn
 
+class ContextAttention(nn.Module):
+    def __init__(self, context_dim, hidden_dim):
+        super(ContextAttention, self).__init__()
+        self.query = nn.Linear(hidden_dim, hidden_dim)
+        self.key = nn.Linear(context_dim, hidden_dim)
+        self.value = nn.Linear(context_dim, hidden_dim)
+        self.scale = hidden_dim ** 0.5
+
+    def forward(self, decoder_hidden, context_features):
+        """
+        decoder_hidden: [batch_size, hidden_dim]
+        context_features: [batch_size, context_dim]
+        """
+        q = self.query(decoder_hidden).unsqueeze(1)  # [B, 1, H]
+        k = self.key(context_features).unsqueeze(1)  # [B, 1, H]
+        v = self.value(context_features).unsqueeze(1)  # [B, 1, H]
+
+        attn_scores = (q * k).sum(dim=-1) / self.scale  # [B, 1]
+        attn_weights = torch.softmax(attn_scores, dim=1)  # [B, 1]
+
+        attended_context = attn_weights.unsqueeze(-1) * v  # [B, 1, H]
+        attended_context = attended_context.squeeze(1)  # [B, H]
+        return attended_context
+
 class ContextualSocialLSTM(nn.Module):
-    def __init__(self, input_size=18, context_dim=7, hidden_size=256, output_size=2, num_layers=2):
+    def __init__(self, input_size=9, context_dim=15, hidden_size=256, output_size=2, num_layers=2):
         super(ContextualSocialLSTM, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
-        self.context_fc = nn.Sequential(
-            nn.Linear(context_dim, hidden_size),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_size)
-        )
-        self.output_fc = nn.Linear(hidden_size * 2, output_size)  # Combine LSTM + context
+        self.ego_lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
+                                num_layers=num_layers, batch_first=True)
+        self.nbr_lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
+                                num_layers=num_layers, batch_first=True)
+        
+        self.context_attention = ContextAttention(context_dim, hidden_size)
+        self.output_fc = nn.Linear(hidden_size * 2, output_size)
 
     def forward(self, hist, nbrs, mask, context):
-        # Ensure hist and nbrs have the same sequence length
-        if hist.size(1) != nbrs.size(1):
-            max_len = max(hist.size(1), nbrs.size(1))
-            if hist.size(1) < max_len:
-                padding = torch.zeros(hist.size(0), max_len - hist.size(1), hist.size(2), device=hist.device)
-                hist = torch.cat([hist, padding], dim=1)
-            if nbrs.size(1) < max_len:
-                padding = torch.zeros(nbrs.size(0), max_len - nbrs.size(1), nbrs.size(2), device=nbrs.device)
-                nbrs = torch.cat([nbrs, padding], dim=1)
+        if nbrs.dim() == 3:
+            # Already (batch_size, seq_len, feat_dim)
+            nbrs = nbrs.unsqueeze(1)  # -> (batch_size, 1, seq_len, feat_dim)
 
-        x = torch.cat([hist, nbrs], dim=2)  # [B, T, 18]
-        x, _ = self.lstm(x)
-        lstm_out = x[:, -1, :]  # [B, hidden]
+        batch_size, num_neighbors, seq_len, feat_dim = nbrs.size()
+        nbrs = nbrs.view(batch_size * num_neighbors, seq_len, feat_dim)
 
-        context_out = self.context_fc(context)  # [B, hidden]
-        combined = torch.cat([lstm_out, context_out], dim=1)  # [B, hidden*2]
+        nbr_out, _ = self.nbr_lstm(nbrs)
+        nbr_final = nbr_out[:, -1, :].view(batch_size, num_neighbors, -1)
 
-        output = self.output_fc(combined)  # [B, 2] → x, y
+        attended_nbrs = nbr_final.mean(dim=1)  # Simplified mean pooling instead of neighbor attention
+
+        ego_out, _ = self.ego_lstm(hist)
+        ego_final = ego_out[:, -1, :]
+
+        attended_context = self.context_attention(ego_final, context)
+
+        combined = torch.cat([ego_final + attended_nbrs, attended_context], dim=1)
+        output = self.output_fc(combined)
         return output
 
-# Weight initialization
-
+# Weight Initialization (keep as you had)
 def init_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.xavier_uniform_(m.weight)

@@ -97,16 +97,19 @@ def extract_features():
                 closest_curvature = lane["curvature"]
                 encoded_type = lane["type_encoded"]
 
+        weight = 1 / (closest_dist + 1e-3)  # or np.exp(-closest_dist / 20)
+
         features.append([
-            closest_dist,
-            closest_alignment,
-            closest_curvature,
-            encoded_type,
-            vx,
-            vy,
-            ax,
-            ay
+            closest_dist * weight,
+            closest_alignment * weight,
+            closest_curvature * weight,
+            encoded_type * weight,
+            vx * weight,
+            vy * weight,
+            ax * weight,
+            ay * weight
         ])
+
 
     features = np.array(features)
     np.save(output_path, features)
