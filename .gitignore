@@ -1,2 +1,4 @@
 data/processed/social_vehicles.csv
+data/processed/social_vehicles_yaw.csv
 data/processed/ego_vehicle_yaw.csv
+data/processed/ego_vehicle_with_intention.csv
